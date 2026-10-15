@@ -1,0 +1,24 @@
+const {test,before,after}=require('node:test');
+const assert=require('node:assert/strict');
+process.env.APP_PASSWORD='test-password-only';
+process.env.DATABASE_URL='';
+const app=require('../app');
+let server,base,cookie;
+before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${server.address().port}`;});
+after(()=>new Promise(resolve=>server.close(resolve)));
+test('authentication, validation and safe configuration errors',async()=>{
+  let response=await fetch(base+'/api/expenses?month=2026-10');assert.equal(response.status,401);
+  response=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'wrong'})});assert.equal(response.status,401);
+  response=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:process.env.APP_PASSWORD})});assert.equal(response.status,200);
+  cookie=response.headers.get('set-cookie').split(';')[0];assert.match(response.headers.get('set-cookie'),/HttpOnly/);assert.match(response.headers.get('set-cookie'),/SameSite=Strict/i);
+  response=await fetch(base+'/api/session',{headers:{Cookie:cookie}});assert.equal(response.status,200);
+  response=await fetch(base+'/api/session',{headers:{Cookie:cookie+'bad'}});assert.equal(response.status,401);
+  response=await fetch(base+'/api/expenses?month=2026-13',{headers:{Cookie:cookie}});assert.equal(response.status,400);
+  response=await fetch(base+'/api/expenses',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({date:'2026-02-30',title:'test',category:'식비',amount:100})});assert.equal(response.status,400);
+  response=await fetch(base+'/api/expenses',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({date:'2026-02-28',title:'test',category:'식비',amount:-1})});assert.equal(response.status,400);
+  response=await fetch(base+'/api/expenses?month=2026-10',{headers:{Cookie:cookie}});assert.equal(response.status,503);assert.doesNotMatch(await response.text(),/postgresql|test-password-only/);
+  response=await fetch(base+'/api/logout',{method:'POST',headers:{Cookie:cookie,Origin:'https://other.example'}});assert.equal(response.status,403);
+  response=await fetch(base+'/');assert.equal(response.status,200);assert.match(await response.text(),/차곡/);
+  response=await fetch(base+'/.env');assert.equal(response.status,404);
+  response=await fetch(base+'/api/logout',{method:'POST',headers:{Cookie:cookie}});assert.equal(response.status,200);assert.match(response.headers.get('set-cookie'),/Expires=Thu, 01 Jan 1970/);
+});
